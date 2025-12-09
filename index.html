@@ -3,19 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RoboMaster 極速亂鬥管理系統 v2.0</title>
-    <!-- Vue 3 -->
+    <title>RoboMaster 極速亂鬥管理系統 v3.0</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
-    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Firebase -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js";
         import { getFirestore, collection, addDoc, onSnapshot, doc, updateDoc, writeBatch, deleteDoc, getDocs } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore.js";
 
         // ★★★ 請將此處替換為您的 Firebase Config ★★★
         const firebaseConfig = {
-            apiKey: "AIzaSyBdAMarLmul5OZgC_yIBs_pfkDvA2BWLFM",
+            aapiKey: "AIzaSyBdAMarLmul5OZgC_yIBs_pfkDvA2BWLFM",
             authDomain: "robomaster-competition.firebaseapp.com",
             projectId: "robomaster-competition",
             storageBucket: "robomaster-competition.firebasestorage.app",
@@ -30,17 +27,13 @@
 
         createApp({
             setup() {
-                // 基礎狀態
-                const currentView = ref('schedule'); // schedule, checkin, admin
-                const adminStage = ref('prelim'); // prelim, semi, final (裁判頁面的子分頁)
+                const currentView = ref('schedule'); 
+                const adminStage = ref('prelim'); 
                 const newPlayerName = ref('');
                 const newPlayerGroup = ref('A');
-                
-                // 數據存儲
                 const players = ref([]);
                 const matches = ref([]);
 
-                // --- 數據監聽 ---
                 onMounted(() => {
                     onSnapshot(collection(db, "players"), (snapshot) => {
                         players.value = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -50,382 +43,358 @@
                     });
                 });
 
-                // --- 功能 1: 測試數據生成 ---
+                // --- 數據操作 ---
                 const generateTestData = async () => {
-                    if (!confirm("這將生成60名測試選手，確定嗎？")) return;
+                    if (!confirm("生成60名測試選手？")) return;
                     const batch = writeBatch(db);
-                    
-                    // 生成 A 組 32 人
                     for (let i = 1; i <= 32; i++) {
-                        const ref = doc(collection(db, "players"));
-                        batch.set(ref, { name: `A組同學-${i}`, group: 'A', status: 'registered' });
+                        batch.set(doc(collection(db, "players")), { name: `A組-${i}`, group: 'A', status: 'registered' });
                     }
-                    // 生成 B 組 28 人
                     for (let i = 1; i <= 28; i++) {
-                        const ref = doc(collection(db, "players"));
-                        batch.set(ref, { name: `B組同學-${i}`, group: 'B', status: 'registered' });
+                        batch.set(doc(collection(db, "players")), { name: `B組-${i}`, group: 'B', status: 'registered' });
                     }
-                    
                     await batch.commit();
-                    alert("已生成 60 位測試選手！");
                 };
 
-                // --- 功能 2: 檢錄 ---
                 const addPlayer = async () => {
-                    if (!newPlayerName.value) return alert("請輸入姓名");
-                    await addDoc(collection(db, "players"), {
-                        name: newPlayerName.value,
-                        group: newPlayerGroup.value,
-                        status: 'registered'
-                    });
+                    if (!newPlayerName.value) return;
+                    await addDoc(collection(db, "players"), { name: newPlayerName.value, group: newPlayerGroup.value });
                     newPlayerName.value = '';
-                    alert("報名成功");
+                    alert("成功");
                 };
 
-                // 清空重置
                 const resetData = async () => {
-                   if(!confirm("⚠️ 警告：這將刪除所有選手和賽程！確定嗎？")) return;
+                   if(!confirm("⚠️ 確定清空所有數據？")) return;
                    const pSnaps = await getDocs(collection(db, "players"));
                    pSnaps.forEach(d => deleteDoc(doc(db, "players", d.id)));
                    const mSnaps = await getDocs(collection(db, "matches"));
                    mSnaps.forEach(d => deleteDoc(doc(db, "matches", d.id)));
-                   alert("數據已全部清空");
                 };
 
-                // --- 核心算法 ---
+                // --- 賽程生成邏輯 ---
                 const shuffle = (array) => array.sort(() => Math.random() - 0.5);
 
-                // --- 功能 3: 增量生成初賽 ---
                 const generatePrelims = async () => {
-                    // 1. 找出所有已經在比賽中的選手 ID
                     const activePlayerIds = new Set();
-                    matches.value.forEach(m => {
-                        m.players.forEach(p => activePlayerIds.add(p.id));
-                    });
-
-                    // 2. 過濾出「尚未參賽」的選手
+                    matches.value.forEach(m => m.players.forEach(p => activePlayerIds.add(p.id)));
+                    
                     const unassignedA = players.value.filter(p => p.group === 'A' && !activePlayerIds.has(p.id));
                     const unassignedB = players.value.filter(p => p.group === 'B' && !activePlayerIds.has(p.id));
 
-                    if (unassignedA.length === 0 && unassignedB.length === 0) {
-                        return alert("沒有新選手需要排程 (所有人都已安排比賽)");
-                    }
+                    if (unassignedA.length === 0 && unassignedB.length === 0) return alert("無新選手");
 
                     const batch = writeBatch(db);
-                    let matchCount = 0;
-
-                    // 處理 A 組未安排的人
-                    const shuffledA = shuffle([...unassignedA]);
-                    for (let i = 0; i < shuffledA.length; i += 4) {
-                        const chunk = shuffledA.slice(i, i + 4);
-                        const matchRef = doc(collection(db, "matches"));
-                        batch.set(matchRef, {
-                            round: 'prelim',
-                            group: 'A',
-                            players: chunk,
-                            room: 'Room 1', // A組預設 Room 1
-                            winnerId: null,
-                            createdAt: Date.now()
-                        });
-                        matchCount++;
-                    }
-
-                    // 處理 B 組未安排的人
-                    const shuffledB = shuffle([...unassignedB]);
-                    for (let i = 0; i < shuffledB.length; i += 4) {
-                        const chunk = shuffledB.slice(i, i + 4);
-                        const matchRef = doc(collection(db, "matches"));
-                        batch.set(matchRef, {
-                            round: 'prelim',
-                            group: 'B',
-                            players: chunk,
-                            room: 'Room 2', // B組預設 Room 2
-                            winnerId: null,
-                            createdAt: Date.now()
-                        });
-                        matchCount++;
-                    }
+                    let count = 0;
+                    
+                    const makeMatch = (list, group, room) => {
+                        const s = shuffle([...list]);
+                        for (let i = 0; i < s.length; i += 4) {
+                            const chunk = s.slice(i, i + 4);
+                            batch.set(doc(collection(db, "matches")), {
+                                round: 'prelim', group, players: chunk, room, winnerId: null, createdAt: Date.now()
+                            });
+                            count++;
+                        }
+                    };
+                    makeMatch(unassignedA, 'A', 'Room 1');
+                    makeMatch(unassignedB, 'B', 'Room 2');
 
                     await batch.commit();
-                    alert(`已為新到場的選手生成了 ${matchCount} 場初賽！`);
+                    alert(`新增 ${count} 場初賽`);
                 };
 
                 const generateSemis = async () => {
-                    // 檢查是否還有未完成的半決賽
-                    if(matches.value.some(m => m.round === 'semi' && !m.winnerId)) {
-                        if(!confirm("尚有半決賽未完成，確定要生成新的半決賽嗎？")) return;
-                    }
-
-                    // 獲取初賽晉級者，且尚未參加過半決賽的人
+                    // 獲取尚未參加半決賽的初賽晉級者
                     const activeSemiIds = new Set();
-                    matches.value.filter(m => m.round === 'semi').forEach(m => {
-                        m.players.forEach(p => activeSemiIds.add(p.id));
-                    });
+                    matches.value.filter(m => m.round === 'semi').forEach(m => m.players.forEach(p => activeSemiIds.add(p.id)));
 
-                    const prelimWinners = matches.value
+                    const winners = matches.value
                         .filter(m => m.round === 'prelim' && m.winnerId)
                         .map(m => m.players.find(p => p.id === m.winnerId))
-                        .filter(p => !activeSemiIds.has(p.id)); // 過濾掉已排半決賽的人
+                        .filter(p => p && !activeSemiIds.has(p.id));
 
-                    if (prelimWinners.length === 0) return alert("沒有待定排程的晉級者");
+                    if (winners.length === 0) return alert("無待定晉級者");
 
-                    const shuffled = shuffle([...prelimWinners]);
                     const batch = writeBatch(db);
-
-                    for (let i = 0; i < shuffled.length; i += 3) {
-                        const chunk = shuffled.slice(i, i + 3);
-                        const matchRef = doc(collection(db, "matches"));
-                        batch.set(matchRef, {
-                            round: 'semi',
-                            group: 'Merged',
-                            players: chunk,
-                            room: i % 2 === 0 ? 'Room 1' : 'Room 2',
-                            winnerId: null,
-                            createdAt: Date.now()
+                    const s = shuffle([...winners]);
+                    for (let i = 0; i < s.length; i += 3) {
+                        batch.set(doc(collection(db, "matches")), {
+                            round: 'semi', group: 'Merged', players: s.slice(i, i + 3), 
+                            room: i % 2 === 0 ? 'Room 1' : 'Room 2', winnerId: null, createdAt: Date.now()
                         });
                     }
                     await batch.commit();
-                    alert("半決賽賽程生成完畢！");
+                    alert("半決賽生成");
                 };
 
                 const generateFinal = async () => {
-                     // 檢查決賽是否已存在
                     if(matches.value.some(m => m.round === 'final')) {
-                        if(!confirm("決賽已經存在，要重新生成嗎？(這將覆蓋舊決賽)")) return;
-                        // 此處僅做簡單新增，不刪除舊的
+                        if(!confirm("決賽已存在，要新增嗎？")) return;
                     }
-
-                    const semiWinners = matches.value
+                    const winners = matches.value
                         .filter(m => m.round === 'semi' && m.winnerId)
                         .map(m => m.players.find(p => p.id === m.winnerId));
                     
-                    if (semiWinners.length === 0) return alert("還沒有半決賽晉級者");
+                    if (winners.length === 0) return alert("無半決賽晉級者");
 
                     await addDoc(collection(db, "matches"), {
-                        round: 'final',
-                        group: 'Final',
-                        players: semiWinners, 
-                        room: 'Main Stage',
-                        winnerId: null
+                        round: 'final', group: 'Final', players: winners, room: 'Main Stage',
+                        ranks: [] // 用於存儲名次 ID [1st_ID, 2nd_ID, 3rd_ID]
                     });
-                    alert("決賽生成！");
+                    alert("決賽生成");
                 };
 
+                // --- 裁判判定邏輯 ---
+                
+                // 初賽與半決賽 (單人晉級)
                 const setWinner = async (match, winnerId) => {
-                    if(!confirm(`確認 ${match.players.find(p=>p.id===winnerId).name} 獲勝？`)) return;
-                    await updateDoc(doc(db, "matches", match.id), { winnerId: winnerId });
+                    if(!confirm("確認晉級？")) return;
+                    await updateDoc(doc(db, "matches", match.id), { winnerId });
                 };
 
-                // 分類計算屬性
+                // 決賽 (前三名排名)
+                const toggleFinalRank = async (match, playerId) => {
+                    let currentRanks = match.ranks || []; // 確保是陣列
+                    
+                    // 如果這個人已經在排名裡，將他移除 (取消獲獎)
+                    if (currentRanks.includes(playerId)) {
+                        currentRanks = currentRanks.filter(id => id !== playerId);
+                    } else {
+                        // 如果還沒滿3人，加入排名
+                        if (currentRanks.length < 3) {
+                            currentRanks.push(playerId);
+                        } else {
+                            alert("前三名已滿！請先點擊已獲獎者以取消，再重新選擇。");
+                            return;
+                        }
+                    }
+
+                    await updateDoc(doc(db, "matches", match.id), { ranks: currentRanks });
+                };
+
+                // 輔助顯示名次
+                const getRankDisplay = (match, playerId) => {
+                    if (!match.ranks) return null;
+                    const index = match.ranks.indexOf(playerId);
+                    if (index === 0) return { label: '🥇 冠軍', color: 'bg-yellow-400 text-yellow-900 border-yellow-600' };
+                    if (index === 1) return { label: '🥈 亞軍', color: 'bg-gray-300 text-gray-800 border-gray-500' };
+                    if (index === 2) return { label: '🥉 季軍', color: 'bg-orange-300 text-orange-900 border-orange-600' };
+                    return null;
+                };
+
                 const prelimMatches = computed(() => matches.value.filter(m => m.round === 'prelim').sort((a,b)=>a.createdAt - b.createdAt));
                 const semiMatches = computed(() => matches.value.filter(m => m.round === 'semi').sort((a,b)=>a.createdAt - b.createdAt));
                 const finalMatches = computed(() => matches.value.filter(m => m.round === 'final'));
 
                 return {
-                    currentView, adminStage,
-                    newPlayerName, newPlayerGroup, players,
+                    currentView, adminStage, newPlayerName, newPlayerGroup, players,
                     addPlayer, generateTestData, resetData,
                     generatePrelims, generateSemis, generateFinal,
                     prelimMatches, semiMatches, finalMatches,
-                    setWinner
+                    setWinner, toggleFinalRank, getRankDisplay
                 };
             }
         }).mount('#app');
     </script>
 </head>
-<body class="bg-gray-100 min-h-screen text-gray-800 font-sans">
-    <div id="app" class="max-w-5xl mx-auto bg-white shadow-2xl min-h-screen flex flex-col">
+<body class="bg-slate-50 min-h-screen font-sans text-slate-800">
+    <div id="app" class="max-w-6xl mx-auto bg-white shadow-2xl min-h-screen flex flex-col">
         
         <!-- 頂部導航 -->
-        <nav class="flex text-lg font-bold text-white bg-slate-800">
-            <button @click="currentView='schedule'" :class="currentView=='schedule'?'bg-blue-600':'hover:bg-slate-700'" class="flex-1 py-4 transition">📊 觀眾/賽程</button>
+        <nav class="flex text-lg font-bold text-white bg-slate-900 sticky top-0 z-50">
+            <button @click="currentView='schedule'" :class="currentView=='schedule'?'bg-blue-600':'hover:bg-slate-700'" class="flex-1 py-4 transition">📊 觀眾賽程</button>
             <button @click="currentView='checkin'" :class="currentView=='checkin'?'bg-blue-600':'hover:bg-slate-700'" class="flex-1 py-4 transition">📝 檢錄處</button>
-            <button @click="currentView='admin'" :class="currentView=='admin'?'bg-blue-600':'hover:bg-slate-700'" class="flex-1 py-4 transition">⚖️ 裁判/控台</button>
+            <button @click="currentView='admin'" :class="currentView=='admin'?'bg-blue-600':'hover:bg-slate-700'" class="flex-1 py-4 transition">⚖️ 裁判控台</button>
         </nav>
 
-        <!-- 頁面內容區 -->
-        <main class="p-6 flex-1">
+        <main class="p-4 md:p-8 flex-1">
             
-            <!-- 1. 檢錄頁面 -->
-            <div v-if="currentView === 'checkin'" class="space-y-6">
-                <div class="bg-blue-50 border-l-4 border-blue-500 p-4 rounded">
-                    <h2 class="text-xl font-bold mb-4">新增選手</h2>
-                    <div class="flex flex-col md:flex-row gap-2">
-                        <input v-model="newPlayerName" type="text" placeholder="輸入選手姓名" class="border-2 border-gray-300 p-2 flex-1 rounded focus:border-blue-500 outline-none">
-                        <select v-model="newPlayerGroup" class="border-2 border-gray-300 p-2 rounded w-full md:w-32">
+            <!-- 1. 檢錄 -->
+            <div v-if="currentView === 'checkin'" class="space-y-6 max-w-3xl mx-auto">
+                <div class="bg-blue-50 border-l-4 border-blue-500 p-6 rounded shadow-sm">
+                    <h2 class="text-xl font-bold mb-4">選手報名</h2>
+                    <div class="flex gap-2">
+                        <input v-model="newPlayerName" @keyup.enter="addPlayer" type="text" placeholder="輸入姓名..." class="border-2 p-2 flex-1 rounded focus:border-blue-500 outline-none">
+                        <select v-model="newPlayerGroup" class="border-2 p-2 rounded w-24">
                             <option value="A">A組</option>
                             <option value="B">B組</option>
                         </select>
-                        <button @click="addPlayer" class="bg-blue-600 hover:bg-blue-700 text-white px-8 py-2 rounded font-bold transition">報名</button>
+                        <button @click="addPlayer" class="bg-blue-600 text-white px-6 rounded font-bold hover:bg-blue-700">添加</button>
                     </div>
                 </div>
-
-                <!-- 測試功能區 -->
-                <div class="bg-gray-100 p-4 rounded border border-gray-300 flex justify-between items-center">
-                    <span class="text-sm text-gray-500">開發測試專用：</span>
-                    <button @click="generateTestData" class="bg-gray-600 hover:bg-gray-700 text-white px-4 py-1 rounded text-sm">🧪 一鍵填入 60 人測試名單</button>
+                <div class="text-right">
+                    <button @click="generateTestData" class="text-xs text-gray-400 hover:text-gray-600 underline">開發測試：一鍵生成60人</button>
                 </div>
-
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div>
-                        <h3 class="font-bold text-blue-800 mb-2 border-b pb-1">A組名單 ({{ players.filter(p=>p.group=='A').length }})</h3>
-                        <ul class="max-h-96 overflow-y-auto bg-gray-50 p-2 rounded">
-                            <li v-for="p in players.filter(p=>p.group=='A')" :key="p.id" class="py-1 border-b last:border-0 border-gray-200">{{ p.name }}</li>
-                        </ul>
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="bg-gray-50 p-4 rounded border">
+                        <h3 class="font-bold text-blue-800 mb-2">A組 ({{ players.filter(p=>p.group=='A').length }})</h3>
+                        <div class="h-64 overflow-y-auto text-sm space-y-1">
+                            <div v-for="p in players.filter(p=>p.group=='A')" :key="p.id" class="px-2 py-1 bg-white rounded shadow-sm">{{ p.name }}</div>
+                        </div>
                     </div>
-                    <div>
-                        <h3 class="font-bold text-green-800 mb-2 border-b pb-1">B組名單 ({{ players.filter(p=>p.group=='B').length }})</h3>
-                        <ul class="max-h-96 overflow-y-auto bg-gray-50 p-2 rounded">
-                            <li v-for="p in players.filter(p=>p.group=='B')" :key="p.id" class="py-1 border-b last:border-0 border-gray-200">{{ p.name }}</li>
-                        </ul>
+                    <div class="bg-gray-50 p-4 rounded border">
+                        <h3 class="font-bold text-green-800 mb-2">B組 ({{ players.filter(p=>p.group=='B').length }})</h3>
+                        <div class="h-64 overflow-y-auto text-sm space-y-1">
+                            <div v-for="p in players.filter(p=>p.group=='B')" :key="p.id" class="px-2 py-1 bg-white rounded shadow-sm">{{ p.name }}</div>
+                        </div>
                     </div>
                 </div>
             </div>
 
-            <!-- 2. 裁判頁面 (已分頁優化) -->
+            <!-- 2. 裁判 -->
             <div v-if="currentView === 'admin'">
                 <div class="flex justify-between items-center mb-6">
-                    <h2 class="text-2xl font-bold text-gray-800">賽程控制中心</h2>
-                    <button @click="resetData" class="bg-red-100 text-red-600 hover:bg-red-200 px-3 py-1 rounded text-sm border border-red-200">⚠️ 重置所有數據</button>
+                    <h2 class="text-2xl font-bold">賽程控制中心</h2>
+                    <button @click="resetData" class="text-red-500 text-sm border border-red-200 px-3 py-1 rounded hover:bg-red-50">重置系統</button>
                 </div>
 
-                <!-- 裁判子導航 -->
-                <div class="flex mb-6 border-b-2 border-gray-200">
-                    <button @click="adminStage='prelim'" :class="adminStage=='prelim'?'border-b-4 border-purple-600 text-purple-700':'text-gray-500'" class="px-6 py-2 font-bold transition">1. 初賽階段</button>
-                    <button @click="adminStage='semi'" :class="adminStage=='semi'?'border-b-4 border-indigo-600 text-indigo-700':'text-gray-500'" class="px-6 py-2 font-bold transition">2. 半決賽階段</button>
-                    <button @click="adminStage='final'" :class="adminStage=='final'?'border-b-4 border-yellow-600 text-yellow-700':'text-gray-500'" class="px-6 py-2 font-bold transition">3. 決賽階段</button>
+                <div class="flex border-b-2 border-gray-100 mb-6">
+                    <button v-for="s in ['prelim', 'semi', 'final']" @click="adminStage=s" 
+                        class="px-6 py-3 font-bold transition capitalize"
+                        :class="adminStage===s ? 'text-blue-600 border-b-4 border-blue-600' : 'text-gray-400 hover:text-gray-600'">
+                        {{ s === 'prelim' ? '1. 初賽' : (s === 'semi' ? '2. 半決賽' : '3. 決賽') }}
+                    </button>
                 </div>
 
                 <!-- 初賽管理 -->
-                <div v-if="adminStage === 'prelim'">
-                    <div class="bg-purple-50 p-4 rounded mb-4 flex justify-between items-center">
-                        <div>
-                            <p class="font-bold text-purple-900">生成初賽賽程</p>
-                            <p class="text-sm text-purple-600">系統會自動檢測新增的遲到選手，並只為他們生成新場次，不影響舊賽程。</p>
-                        </div>
-                        <button @click="generatePrelims" class="bg-purple-600 hover:bg-purple-700 text-white px-6 py-2 rounded shadow">生成/更新初賽</button>
-                    </div>
-                    
-                    <div class="grid gap-4">
-                        <div v-for="(match, idx) in prelimMatches" :key="match.id" class="bg-white border p-4 rounded shadow-sm flex flex-col md:flex-row justify-between items-center gap-4">
-                            <div class="font-bold text-gray-500 whitespace-nowrap">
-                                <span class="px-2 py-1 rounded text-white text-xs mr-2" :class="match.group=='A'?'bg-blue-400':'bg-green-400'">{{match.group}}組</span>
-                                {{ match.room }}
+                <div v-if="adminStage === 'prelim'" class="space-y-4">
+                    <button @click="generatePrelims" class="w-full py-3 bg-purple-600 text-white rounded font-bold hover:bg-purple-700 shadow">生成/更新 初賽賽程</button>
+                    <div class="grid lg:grid-cols-2 gap-4">
+                        <div v-for="m in prelimMatches" :key="m.id" class="bg-white p-4 rounded border shadow-sm flex items-center gap-4">
+                            <div class="w-20 text-xs font-bold text-gray-500 text-center">
+                                <div class="px-2 py-1 text-white rounded mb-1" :class="m.group=='A'?'bg-blue-400':'bg-green-400'">{{m.group}}組</div>
+                                {{m.room}}
                             </div>
-                            <div class="flex flex-1 gap-2 w-full">
-                                <button v-for="p in match.players" :key="p.id" @click="setWinner(match, p.id)" 
-                                    :disabled="!!match.winnerId"
-                                    :class="match.winnerId === p.id ? 'bg-green-500 text-white ring-2 ring-green-300' : 'bg-gray-50 hover:bg-gray-200'"
-                                    class="flex-1 py-3 rounded border transition text-sm md:text-base">
-                                    {{ p.name }}
-                                    <span v-if="match.winnerId === p.id">🏆</span>
+                            <div class="flex-1 grid grid-cols-2 gap-2">
+                                <button v-for="p in m.players" @click="setWinner(m, p.id)" :disabled="!!m.winnerId"
+                                    class="py-2 text-sm border rounded transition"
+                                    :class="m.winnerId===p.id?'bg-green-500 text-white font-bold ring-2 ring-green-300':'hover:bg-gray-50'">
+                                    {{ p.name }} <span v-if="m.winnerId===p.id">🏆</span>
                                 </button>
                             </div>
                         </div>
-                        <p v-if="prelimMatches.length === 0" class="text-center text-gray-400 py-10">暫無初賽賽程，請點擊上方按鈕生成</p>
                     </div>
                 </div>
 
                 <!-- 半決賽管理 -->
-                <div v-if="adminStage === 'semi'">
-                    <div class="bg-indigo-50 p-4 rounded mb-4 flex justify-between items-center">
-                        <div>
-                            <p class="font-bold text-indigo-900">生成半決賽賽程</p>
-                            <p class="text-sm text-indigo-600">將初賽晉級者混合 (3人一局)。</p>
-                        </div>
-                        <button @click="generateSemis" class="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded shadow">生成半決賽</button>
-                    </div>
-                    <div class="grid gap-4">
-                        <div v-for="match in semiMatches" :key="match.id" class="bg-white border p-4 rounded shadow-sm flex flex-col md:flex-row justify-between items-center gap-4">
-                            <div class="font-bold text-gray-500">{{ match.room }}</div>
-                            <div class="flex flex-1 gap-2 w-full">
-                                <button v-for="p in match.players" :key="p.id" @click="setWinner(match, p.id)" 
-                                    :disabled="!!match.winnerId"
-                                    :class="match.winnerId === p.id ? 'bg-green-500 text-white' : 'bg-gray-50 hover:bg-gray-200'"
-                                    class="flex-1 py-3 rounded border transition">
-                                    {{ p.name }} <span v-if="match.winnerId === p.id">🏆</span>
+                <div v-if="adminStage === 'semi'" class="space-y-4">
+                    <button @click="generateSemis" class="w-full py-3 bg-indigo-600 text-white rounded font-bold hover:bg-indigo-700 shadow">生成半決賽</button>
+                    <div class="grid lg:grid-cols-2 gap-4">
+                        <div v-for="m in semiMatches" :key="m.id" class="bg-white p-4 rounded border shadow-sm flex items-center gap-4">
+                            <div class="w-20 font-bold text-gray-500 text-center text-sm">{{m.room}}</div>
+                            <div class="flex-1 flex gap-2">
+                                <button v-for="p in m.players" @click="setWinner(m, p.id)" :disabled="!!m.winnerId"
+                                    class="flex-1 py-3 text-sm border rounded transition"
+                                    :class="m.winnerId===p.id?'bg-green-500 text-white font-bold':'hover:bg-gray-50'">
+                                    {{ p.name }} <span v-if="m.winnerId===p.id">🏆</span>
                                 </button>
                             </div>
                         </div>
-                        <p v-if="semiMatches.length === 0" class="text-center text-gray-400 py-10">暫無半決賽賽程</p>
                     </div>
                 </div>
 
-                <!-- 決賽管理 -->
-                <div v-if="adminStage === 'final'">
-                     <div class="bg-yellow-50 p-4 rounded mb-4 flex justify-between items-center">
-                        <div>
-                            <p class="font-bold text-yellow-900">生成決賽賽程</p>
-                            <p class="text-sm text-yellow-600">5人一局排名賽。</p>
-                        </div>
-                        <button @click="generateFinal" class="bg-yellow-600 hover:bg-yellow-700 text-white px-6 py-2 rounded shadow">生成決賽</button>
-                    </div>
-                    <div v-for="match in finalMatches" :key="match.id" class="bg-white border-2 border-yellow-400 p-6 rounded shadow-lg text-center">
-                        <h3 class="text-2xl font-bold mb-4 text-yellow-600">🏆 冠軍爭奪戰 🏆</h3>
-                        <div class="flex flex-wrap gap-4 justify-center">
-                             <button v-for="p in match.players" :key="p.id" @click="setWinner(match, p.id)" 
-                                :disabled="!!match.winnerId"
-                                :class="match.winnerId === p.id ? 'bg-yellow-500 text-white scale-110 shadow-lg' : 'bg-gray-50 hover:bg-gray-100'"
-                                class="px-6 py-4 rounded-xl border transition text-lg font-bold">
-                                {{ p.name }}
-                                <span v-if="match.winnerId === p.id">🥇</span>
+                <!-- 決賽管理 (更新版：前三名) -->
+                <div v-if="adminStage === 'final'" class="space-y-6">
+                    <button @click="generateFinal" class="w-full py-3 bg-yellow-600 text-white rounded font-bold hover:bg-yellow-700 shadow">生成決賽</button>
+                    
+                    <div v-for="m in finalMatches" :key="m.id" class="bg-white border-4 border-yellow-200 p-6 rounded-xl shadow-lg">
+                        <h3 class="text-center font-bold text-xl text-yellow-800 mb-2">🏆 決賽排名選拔</h3>
+                        <p class="text-center text-gray-500 text-sm mb-6">請依序點擊：先點擊冠軍，再點擊亞軍，最後點擊季軍。</p>
+                        
+                        <div class="flex flex-wrap justify-center gap-4">
+                            <button v-for="p in m.players" :key="p.id" @click="toggleFinalRank(m, p.id)"
+                                class="w-32 h-32 flex flex-col items-center justify-center rounded-xl border-2 transition transform hover:scale-105"
+                                :class="getRankDisplay(m, p.id) ? getRankDisplay(m, p.id).color + ' ring-4 ring-opacity-50' : 'bg-gray-50 border-gray-200 hover:bg-gray-100'">
+                                
+                                <span class="text-2xl mb-2">{{ getRankDisplay(m, p.id) ? getRankDisplay(m, p.id).label.split(' ')[0] : '👤' }}</span>
+                                <span class="font-bold text-lg leading-tight">{{ p.name }}</span>
+                                <span v-if="getRankDisplay(m, p.id)" class="text-xs mt-1 font-bold uppercase">{{ getRankDisplay(m, p.id).label.split(' ')[1] }}</span>
+                            
                             </button>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <!-- 3. 賽程/觀眾頁面 -->
-            <div v-if="currentView === 'schedule'" class="space-y-8">
+            <!-- 3. 觀眾賽程 -->
+            <div v-if="currentView === 'schedule'" class="space-y-10">
                 
-                <!-- 決賽展示 -->
+                <!-- 決賽展示區 (更新視覺) -->
                 <div v-if="finalMatches.length > 0">
-                    <h3 class="text-center text-2xl font-bold text-yellow-600 mb-4">🏆 決賽 - 巔峰對決</h3>
-                    <div v-for="m in finalMatches" class="bg-gradient-to-r from-yellow-100 to-yellow-50 p-6 rounded-xl border border-yellow-300 text-center shadow-lg">
-                        <div class="flex flex-wrap justify-center gap-4">
-                            <div v-for="p in m.players" class="px-6 py-3 bg-white rounded-full shadow font-bold text-lg" :class="{'ring-4 ring-yellow-400 text-yellow-700': m.winnerId===p.id}">
-                                {{ p.name }}
-                                <span v-if="m.winnerId===p.id">🥇冠軍</span>
+                    <h3 class="text-center text-3xl font-black text-yellow-600 mb-6 drop-shadow-sm">🏆 巔峰決賽 🏆</h3>
+                    <div v-for="m in finalMatches" class="max-w-4xl mx-auto">
+                        <!-- 領獎台視覺 -->
+                        <div class="flex flex-wrap justify-center items-end gap-4 text-center">
+                            
+                            <!-- 亞軍 (左) -->
+                            <div class="order-1 w-1/3 md:w-1/4">
+                                <div v-if="m.ranks && m.ranks[1]" class="flex flex-col items-center animate-bounce-in">
+                                    <div class="text-xl font-bold text-gray-600 mb-2">{{ m.players.find(p=>p.id===m.ranks[1]).name }}</div>
+                                    <div class="h-32 w-full bg-gradient-to-t from-gray-400 to-gray-200 rounded-t-lg shadow-lg flex items-center justify-center text-4xl border-t-4 border-gray-400">🥈</div>
+                                </div>
+                                <div v-else class="h-32 w-full bg-gray-100 rounded-t-lg opacity-30 flex items-center justify-center text-2xl">?</div>
+                            </div>
+
+                            <!-- 冠軍 (中) -->
+                            <div class="order-2 w-1/3 md:w-1/4 -mt-10 z-10">
+                                <div v-if="m.ranks && m.ranks[0]" class="flex flex-col items-center transform scale-110">
+                                    <div class="text-2xl font-black text-yellow-600 mb-2">👑 {{ m.players.find(p=>p.id===m.ranks[0]).name }}</div>
+                                    <div class="h-40 w-full bg-gradient-to-t from-yellow-400 to-yellow-200 rounded-t-lg shadow-xl flex items-center justify-center text-6xl border-t-4 border-yellow-400 ring-4 ring-yellow-100">🥇</div>
+                                </div>
+                                <div v-else class="h-40 w-full bg-yellow-50 rounded-t-lg opacity-30 flex items-center justify-center text-2xl">?</div>
+                            </div>
+
+                            <!-- 季軍 (右) -->
+                            <div class="order-3 w-1/3 md:w-1/4">
+                                <div v-if="m.ranks && m.ranks[2]" class="flex flex-col items-center">
+                                    <div class="text-xl font-bold text-orange-700 mb-2">{{ m.players.find(p=>p.id===m.ranks[2]).name }}</div>
+                                    <div class="h-24 w-full bg-gradient-to-t from-orange-400 to-orange-200 rounded-t-lg shadow-lg flex items-center justify-center text-4xl border-t-4 border-orange-400">🥉</div>
+                                </div>
+                                <div v-else class="h-24 w-full bg-orange-50 rounded-t-lg opacity-30 flex items-center justify-center text-2xl">?</div>
+                            </div>
+                        </div>
+
+                        <!-- 參賽名單 -->
+                        <div class="mt-8 text-center">
+                            <h4 class="text-gray-400 text-sm mb-2">決賽參賽者</h4>
+                            <div class="flex flex-wrap justify-center gap-2">
+                                <span v-for="p in m.players" class="px-3 py-1 bg-gray-100 rounded text-gray-600 text-sm">{{ p.name }}</span>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- 半決賽展示 -->
+                <!-- 半決賽 -->
                 <div v-if="semiMatches.length > 0">
-                    <h3 class="text-center text-xl font-bold text-indigo-700 mb-4">⚔️ 半決賽 (3人亂鬥)</h3>
+                    <h3 class="text-center text-2xl font-bold text-indigo-700 mb-4 border-b-2 border-indigo-100 pb-2 inline-block mx-auto">⚔️ 半決賽</h3>
                     <div class="grid md:grid-cols-2 gap-4">
-                        <div v-for="(m, idx) in semiMatches" class="bg-white p-4 rounded shadow border-l-4 border-indigo-500">
-                            <div class="text-gray-400 text-sm mb-2">半決賽 {{idx+1}} ({{m.room}})</div>
-                            <div class="space-y-1">
-                                <div v-for="p in m.players" class="flex justify-between items-center p-1 px-2 rounded" :class="m.winnerId===p.id?'bg-green-100 text-green-800 font-bold':''">
+                        <div v-for="m in semiMatches" class="bg-white p-4 rounded shadow border-l-4 border-indigo-500">
+                            <div class="text-xs text-indigo-400 font-bold uppercase mb-2">{{ m.room }}</div>
+                            <div class="flex flex-col gap-1">
+                                <div v-for="p in m.players" class="flex justify-between p-2 rounded" :class="m.winnerId===p.id?'bg-indigo-100 text-indigo-900 font-bold':''">
                                     <span>{{ p.name }}</span>
-                                    <span v-if="m.winnerId===p.id" class="text-xs bg-green-200 px-2 rounded-full">晉級</span>
+                                    <span v-if="m.winnerId===p.id" class="text-xs bg-indigo-500 text-white px-2 py-0.5 rounded">晉級</span>
                                 </div>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- 初賽展示 -->
-                <div>
-                    <h3 class="text-center text-xl font-bold text-gray-700 mb-4">🏁 初賽 (4人亂鬥)</h3>
-                    <div class="grid md:grid-cols-3 gap-4">
-                        <div v-for="(m, idx) in prelimMatches" class="bg-white p-4 rounded shadow relative overflow-hidden">
-                            <div class="absolute top-0 left-0 w-1 h-full" :class="m.group==='A'?'bg-blue-500':'bg-green-500'"></div>
-                            <div class="flex justify-between mb-2">
-                                <span class="text-xs font-bold px-2 py-0.5 rounded text-white" :class="m.group==='A'?'bg-blue-500':'bg-green-500'">{{m.group}}組</span>
-                                <span class="text-xs text-gray-400">{{m.room}}</span>
-                            </div>
-                            <div class="space-y-1">
-                                <div v-for="p in m.players" class="flex justify-between text-sm p-1 rounded" :class="m.winnerId===p.id?'bg-green-100 font-bold text-green-800':''">
+                <!-- 初賽 -->
+                <div v-if="prelimMatches.length > 0">
+                    <h3 class="text-center text-xl font-bold text-gray-600 mb-4">🏁 初賽小組</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                        <div v-for="m in prelimMatches" class="bg-white p-3 rounded border border-gray-200 relative">
+                            <div class="absolute top-2 right-2 text-xs font-mono text-gray-300">{{ m.room }}</div>
+                            <div class="text-xs font-bold mb-2 inline-block px-2 rounded text-white" :class="m.group=='A'?'bg-blue-400':'bg-green-400'">{{ m.group }}組</div>
+                            <div class="space-y-1 text-sm">
+                                <div v-for="p in m.players" class="flex justify-between" :class="m.winnerId===p.id?'text-green-600 font-bold':''">
                                     <span>{{ p.name }}</span>
                                     <span v-if="m.winnerId===p.id">✅</span>
                                 </div>
                             </div>
                         </div>
                     </div>
-                    <p v-if="prelimMatches.length === 0" class="text-center text-gray-400 mt-8">等待賽程生成...</p>
                 </div>
             </div>
 
