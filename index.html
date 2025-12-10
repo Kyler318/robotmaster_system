@@ -98,8 +98,8 @@
                             count++;
                         }
                     };
-                    makeMatch(unassignedA, 'A', 'Room 1');
-                    makeMatch(unassignedB, 'B', 'Room 2');
+                    makeMatch(unassignedA, 'A', 'Room 7');
+                    makeMatch(unassignedB, 'B', 'Room 10');
 
                     await batch.commit();
                     alert(`新增 ${count} 場初賽`);
@@ -144,7 +144,7 @@
                         const chunk = s.slice(i, i + chunkSize);
                         batch.set(doc(collection(db, "matches")), {
                             round: 'semi', group: 'Merged', players: chunk, 
-                            room: count % 2 === 0 ? 'Room 1' : 'Room 2', winnerId: null, createdAt: Date.now()
+                            room: count % 2 === 0 ? 'Room 7' : 'Room 10', winnerId: null, createdAt: Date.now()
                         });
                         
                         count++;
