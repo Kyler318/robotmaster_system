@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RoboMaster 極速亂鬥管理系統 v4.0</title>
+    <title>RoboMaster 極速亂鬥管理系統 v5.0</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script type="module">
@@ -105,47 +105,64 @@
                     alert(`新增 ${count} 場初賽`);
                 };
 
-                // 2. 半決賽 (增量生成 + 自動等待)
+                // 2. 半決賽 (增量 + 彈性人數 3人或2人)
                 const generateSemis = async () => {
-                    // 找出「已經在半決賽名單」的人
                     const activeSemiIds = new Set();
                     matches.value.filter(m => m.round === 'semi').forEach(m => {
                         m.players.forEach(p => activeSemiIds.add(p.id));
                     });
 
-                    // 找出「初賽贏了」且「還沒打半決賽」的人
                     const waitingList = matches.value
                         .filter(m => m.round === 'prelim' && m.winnerId)
                         .map(m => m.players.find(p => p.id === m.winnerId))
-                        .filter(p => p && !activeSemiIds.has(p.id)); // 排除已排程者
+                        .filter(p => p && !activeSemiIds.has(p.id));
 
-                    // 檢查人數是否足夠開局 (3人一局)
-                    if (waitingList.length < 3) {
-                        return alert(`目前只有 ${waitingList.length} 位晉級者待命，不足 3 人無法開局。\n請先完成更多初賽場次。`);
+                    // 修改點：至少要有 2 人才能開局
+                    if (waitingList.length < 2) {
+                        return alert(`目前只有 ${waitingList.length} 位晉級者待命，無法開局 (至少需 2 人)。`);
                     }
 
                     const batch = writeBatch(db);
                     const s = shuffle([...waitingList]);
                     let count = 0;
+                    let i = 0;
 
-                    // 只生成「完整」的 3 人局，剩下的餘數繼續等待
-                    for (let i = 0; i < s.length - (s.length % 3); i += 3) {
-                        const chunk = s.slice(i, i + 3);
+                    // 邏輯：優先湊 3 人，如果最後剩下 2 人，則 2 人一組
+                    while (i < s.length) {
+                        const remaining = s.length - i;
+                        let chunkSize = 3;
+
+                        // 如果剩餘人數剛好是 2，或者是 4 人時我們取 3 剩 1 (1人只能等)，
+                        // 但如果總數只有 2，或者已經分完 3 剩 2，就開 2 人局。
+                        if (remaining === 2) {
+                            chunkSize = 2;
+                        } else if (remaining < 2) {
+                            // 剩 1 人，跳出循環等待下一批
+                            break; 
+                        }
+
+                        const chunk = s.slice(i, i + chunkSize);
                         batch.set(doc(collection(db, "matches")), {
                             round: 'semi', group: 'Merged', players: chunk, 
-                            room: i % 2 === 0 ? 'Room 1' : 'Room 2', winnerId: null, createdAt: Date.now()
+                            room: count % 2 === 0 ? 'Room 1' : 'Room 2', winnerId: null, createdAt: Date.now()
                         });
+                        
                         count++;
+                        i += chunkSize;
                     }
 
                     await batch.commit();
-                    alert(`已新增 ${count} 場半決賽！\n(剩餘 ${s.length % 3} 人繼續等待下一批)`);
+                    
+                    const leftOver = s.length - i;
+                    let msg = `已新增 ${count} 場半決賽！`;
+                    if (leftOver > 0) msg += `\n(剩餘 ${leftOver} 人需等待更多晉級者)`;
+                    alert(msg);
                 };
 
                 // 3. 決賽
                 const generateFinal = async () => {
                     if(matches.value.some(m => m.round === 'final')) {
-                        if(!confirm("決賽已存在，確定要重新生成嗎？(這將建立一個新的決賽場次)")) return;
+                        if(!confirm("決賽已存在，確定要重新生成嗎？")) return;
                     }
                     const winners = matches.value
                         .filter(m => m.round === 'semi' && m.winnerId)
@@ -160,20 +177,15 @@
                     alert("決賽生成");
                 };
 
-                // --- 裁判判定邏輯 (允許更正) ---
-                
+                // --- 裁判判定邏輯 ---
                 const setWinner = async (match, winnerId) => {
                     const winnerName = match.players.find(p => p.id === winnerId).name;
-                    
                     if (match.winnerId) {
-                        // 如果已經有贏家，這是更正操作
-                        if (match.winnerId === winnerId) return; // 點同一個人不做事
-                        if(!confirm(`⚠️ 注意：本局已有獲勝者。\n\n確定要將獲勝者更改為【${winnerName}】嗎？`)) return;
+                        if (match.winnerId === winnerId) return;
+                        if(!confirm(`⚠️ 確定要將獲勝者更改為【${winnerName}】嗎？`)) return;
                     } else {
-                        // 第一次選擇
                         if(!confirm(`確認【${winnerName}】獲勝？`)) return;
                     }
-                    
                     await updateDoc(doc(db, "matches", match.id), { winnerId });
                 };
 
@@ -273,7 +285,6 @@
                     <button @click="resetData" class="text-red-500 text-sm border border-red-200 px-3 py-1 rounded hover:bg-red-50">重置系統</button>
                 </div>
 
-                <!-- 階段選擇 Tab -->
                 <div class="flex border-b-2 border-gray-100 mb-6 sticky top-0 bg-white z-10 pt-2">
                     <button v-for="s in ['prelim', 'semi', 'final']" @click="adminStage=s" 
                         class="flex-1 px-4 py-3 font-bold transition capitalize text-center"
@@ -310,20 +321,20 @@
                     </div>
                 </div>
 
-                <!-- 半決賽管理 (已優化等待邏輯) -->
+                <!-- 半決賽管理 (已優化 2人開局) -->
                 <div v-if="adminStage === 'semi'" class="space-y-4">
                      <div class="bg-indigo-50 p-4 rounded border border-indigo-200">
                         <div class="flex justify-between items-center mb-2">
                             <h3 class="font-bold text-indigo-900">半決賽排程器</h3>
                             <button @click="generateSemis" class="bg-indigo-600 text-white px-4 py-2 rounded font-bold hover:bg-indigo-700 shadow text-sm">檢查並生成新賽程</button>
                         </div>
-                        <p class="text-xs text-indigo-600">系統會自動湊齊 3 位初賽晉級者生成一場比賽。如果按了沒反應，代表等待人數不足 3 人。</p>
+                        <p class="text-xs text-indigo-600">自動湊 3 人一局。若剩餘 2 人（或總共僅 2 人）將自動生成 2 人局。</p>
                     </div>
 
                     <div class="grid lg:grid-cols-2 gap-4">
                         <div v-for="m in semiMatches" :key="m.id" class="bg-white p-3 rounded border shadow-sm">
                             <div class="flex justify-between text-xs font-bold text-gray-500 mb-2">
-                                <span class="bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded">半決賽</span>
+                                <span class="bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded">半決賽 ({{ m.players.length }}人)</span>
                                 <span>{{m.room}}</span>
                             </div>
                             <div class="flex gap-2">
@@ -392,7 +403,10 @@
                     </h3>
                     <div class="grid md:grid-cols-2 gap-3 px-2">
                         <div v-for="m in semiMatches" class="bg-white p-3 rounded shadow-sm border-l-4 border-indigo-500">
-                            <div class="text-xs text-indigo-400 font-bold mb-2">{{ m.room }}</div>
+                            <div class="flex justify-between mb-2">
+                                <span class="text-xs text-indigo-400 font-bold">{{ m.room }}</span>
+                                <span v-if="m.players.length===2" class="text-xs bg-orange-100 text-orange-600 px-2 rounded">2人對決</span>
+                            </div>
                             <div class="space-y-1">
                                 <div v-for="p in m.players" class="flex justify-between items-center p-1.5 rounded text-sm" 
                                     :class="m.winnerId===p.id?'bg-indigo-600 text-white font-bold shadow-md transform scale-105':'bg-gray-50'">
