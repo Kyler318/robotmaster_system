@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RoboMaster 極速亂鬥管理系統 v5.0</title>
+    <title>RoboMaster 極速亂鬥管理系統 v5.3</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script type="module">
@@ -63,6 +63,17 @@
                     alert("成功");
                 };
 
+                const editPlayer = async (p) => {
+                    const newName = prompt(`修改選手 ${p.name} 的姓名：`, p.name);
+                    if (newName && newName.trim() !== "" && newName !== p.name) {
+                        try {
+                            await updateDoc(doc(db, "players", p.id), { name: newName.trim() });
+                        } catch (e) {
+                            alert("修改失敗：" + e.message);
+                        }
+                    }
+                };
+
                 const resetData = async () => {
                    if(!confirm("⚠️ 確定清空所有數據？")) return;
                    const pSnaps = await getDocs(collection(db, "players"));
@@ -98,65 +109,79 @@
                             count++;
                         }
                     };
+                    // B組改為 Room 8
                     makeMatch(unassignedA, 'A', 'Room 7');
-                    makeMatch(unassignedB, 'B', 'Room 10');
+                    makeMatch(unassignedB, 'B', 'Room 8');
 
                     await batch.commit();
                     alert(`新增 ${count} 場初賽`);
                 };
 
-                // 2. 半決賽 (增量 + 彈性人數 3人或2人)
+                // 2. 半決賽 (動態分配 + 合併至 Room 7)
                 const generateSemis = async () => {
                     const activeSemiIds = new Set();
                     matches.value.filter(m => m.round === 'semi').forEach(m => {
                         m.players.forEach(p => activeSemiIds.add(p.id));
                     });
 
+                    // 獲取晉級者
                     const waitingList = matches.value
                         .filter(m => m.round === 'prelim' && m.winnerId)
                         .map(m => m.players.find(p => p.id === m.winnerId))
                         .filter(p => p && !activeSemiIds.has(p.id));
 
-                    // 修改點：至少要有 2 人才能開局
-                    if (waitingList.length < 2) {
-                        return alert(`目前只有 ${waitingList.length} 位晉級者待命，無法開局 (至少需 2 人)。`);
+                    const n = waitingList.length;
+                    if (n < 2) {
+                        return alert(`目前只有 ${n} 位晉級者待命，無法開局。`);
                     }
 
+                    // --- 分配邏輯 ---
+                    let distribution = [];
+                    
+                    if (n === 8) {
+                        distribution = [2, 2, 2, 2]; // 4局
+                    } else if (n === 9) {
+                        distribution = [2, 2, 2, 3]; // 4局
+                    } else if (n === 10) {
+                        distribution = [3, 3, 4];    // 3局
+                    } else if (n === 11) {
+                        distribution = [3, 3, 3, 2]; // 4局
+                    } else {
+                        // 通用邏輯
+                        let targetGroups = 4; 
+                        if (n < 6) targetGroups = 2;
+                        else if (n < 8) targetGroups = 3;
+                        else if (n > 16) targetGroups = 5;
+
+                        const baseSize = Math.floor(n / targetGroups);
+                        const remainder = n % targetGroups;
+                        
+                        for (let i = 0; i < targetGroups; i++) {
+                            distribution.push(baseSize + (i < remainder ? 1 : 0));
+                        }
+                    }
+
+                    // --- 執行生成 ---
                     const batch = writeBatch(db);
                     const s = shuffle([...waitingList]);
-                    let count = 0;
-                    let i = 0;
-
-                    // 邏輯：優先湊 3 人，如果最後剩下 2 人，則 2 人一組
-                    while (i < s.length) {
-                        const remaining = s.length - i;
-                        let chunkSize = 3;
-
-                        // 如果剩餘人數剛好是 2，或者是 4 人時我們取 3 剩 1 (1人只能等)，
-                        // 但如果總數只有 2，或者已經分完 3 剩 2，就開 2 人局。
-                        if (remaining === 2) {
-                            chunkSize = 2;
-                        } else if (remaining < 2) {
-                            // 剩 1 人，跳出循環等待下一批
-                            break; 
-                        }
-
-                        const chunk = s.slice(i, i + chunkSize);
-                        batch.set(doc(collection(db, "matches")), {
-                            round: 'semi', group: 'Merged', players: chunk, 
-                            room: count % 2 === 0 ? 'Room 7' : 'Room 10', winnerId: null, createdAt: Date.now()
-                        });
+                    let startIndex = 0;
+                    
+                    distribution.forEach((size, idx) => {
+                        const chunk = s.slice(startIndex, startIndex + size);
+                        startIndex += size;
                         
-                        count++;
-                        i += chunkSize;
-                    }
+                        batch.set(doc(collection(db, "matches")), {
+                            round: 'semi', 
+                            group: `S${idx + 1}`,
+                            players: chunk, 
+                            room: 'Room 7', // 全部合併到 Room 7
+                            winnerId: null, 
+                            createdAt: Date.now()
+                        });
+                    });
 
                     await batch.commit();
-                    
-                    const leftOver = s.length - i;
-                    let msg = `已新增 ${count} 場半決賽！`;
-                    if (leftOver > 0) msg += `\n(剩餘 ${leftOver} 人需等待更多晉級者)`;
-                    alert(msg);
+                    alert(`已生成半決賽 (${n}人)：分配為 [${distribution.join(', ')}]，全部在 Room 7`);
                 };
 
                 // 3. 決賽
@@ -174,7 +199,7 @@
                         round: 'final', group: 'Final', players: winners, room: 'Main Stage',
                         ranks: [] 
                     });
-                    alert("決賽生成");
+                    alert(`決賽生成 (共 ${winners.length} 人)`);
                 };
 
                 // --- 裁判判定邏輯 ---
@@ -219,7 +244,7 @@
 
                 return {
                     currentView, adminStage, newPlayerName, newPlayerGroup, players,
-                    addPlayer, generateTestData, resetData,
+                    addPlayer, editPlayer, generateTestData, resetData,
                     generatePrelims, generateSemis, generateFinal,
                     prelimMatches, semiMatches, finalMatches,
                     setWinner, toggleFinalRank, getRankDisplay
@@ -231,7 +256,6 @@
 <body class="bg-slate-50 min-h-screen font-sans text-slate-800">
     <div id="app" class="max-w-6xl mx-auto bg-white shadow-2xl min-h-screen flex flex-col">
         
-        <!-- 頂部導航 -->
         <nav class="flex text-lg font-bold text-white bg-slate-900 sticky top-0 z-50 shadow-md">
             <button @click="currentView='schedule'" :class="currentView=='schedule'?'bg-blue-600':'hover:bg-slate-700'" class="flex-1 py-4 transition flex flex-col items-center">
                 <span>📊</span><span class="text-sm">觀眾賽程</span>
@@ -246,7 +270,6 @@
 
         <main class="p-4 md:p-6 flex-1">
             
-            <!-- 1. 檢錄 -->
             <div v-if="currentView === 'checkin'" class="space-y-6 max-w-3xl mx-auto">
                 <div class="bg-blue-50 border-l-4 border-blue-500 p-6 rounded shadow-sm">
                     <h2 class="text-xl font-bold mb-4">選手報名</h2>
@@ -266,20 +289,23 @@
                     <div class="bg-gray-50 p-4 rounded border h-[60vh] flex flex-col">
                         <h3 class="font-bold text-blue-800 mb-2">A組 ({{ players.filter(p=>p.group=='A').length }})</h3>
                         <div class="flex-1 overflow-y-auto text-sm space-y-1 pr-1">
-                            <div v-for="p in players.filter(p=>p.group=='A')" :key="p.id" class="px-2 py-1 bg-white rounded shadow-sm">{{ p.name }}</div>
+                            <div v-for="p in players.filter(p=>p.group=='A')" :key="p.id" class="px-2 py-1 bg-white rounded shadow-sm flex justify-between items-center group">
+                                <span>{{ p.name }}</span>
+                                <button @click="editPlayer(p)" class="text-xs text-blue-400 hover:text-blue-700 opacity-0 group-hover:opacity-100 transition px-1">✏️</button>
+                            </div>
                         </div>
                     </div>
                     <div class="bg-gray-50 p-4 rounded border h-[60vh] flex flex-col">
                         <h3 class="font-bold text-green-800 mb-2">B組 ({{ players.filter(p=>p.group=='B').length }})</h3>
                         <div class="flex-1 overflow-y-auto text-sm space-y-1 pr-1">
-                            <div v-for="p in players.filter(p=>p.group=='B')" :key="p.id" class="px-2 py-1 bg-white rounded shadow-sm">{{ p.name }}</div>
+                            <div v-for="p in players.filter(p=>p.group=='B')" :key="p.id" class="px-2 py-1 bg-white rounded shadow-sm flex justify-between items-center group">
+                                <span>{{ p.name }}</span>
+                                <button @click="editPlayer(p)" class="text-xs text-green-400 hover:text-green-700 opacity-0 group-hover:opacity-100 transition px-1">✏️</button>
+                            </div>
                         </div>
                     </div>
                 </div>
-            </div>
-
-            <!-- 2. 裁判 -->
-            <div v-if="currentView === 'admin'">
+            </div> <div v-if="currentView === 'admin'">
                 <div class="flex justify-between items-center mb-6">
                     <h2 class="text-2xl font-bold">賽程控制中心</h2>
                     <button @click="resetData" class="text-red-500 text-sm border border-red-200 px-3 py-1 rounded hover:bg-red-50">重置系統</button>
@@ -293,7 +319,6 @@
                     </button>
                 </div>
 
-                <!-- 初賽管理 -->
                 <div v-if="adminStage === 'prelim'" class="space-y-4">
                     <div class="bg-purple-50 p-4 rounded border border-purple-200">
                         <div class="flex justify-between items-center mb-2">
@@ -321,14 +346,13 @@
                     </div>
                 </div>
 
-                <!-- 半決賽管理 (已優化 2人開局) -->
                 <div v-if="adminStage === 'semi'" class="space-y-4">
                      <div class="bg-indigo-50 p-4 rounded border border-indigo-200">
                         <div class="flex justify-between items-center mb-2">
                             <h3 class="font-bold text-indigo-900">半決賽排程器</h3>
                             <button @click="generateSemis" class="bg-indigo-600 text-white px-4 py-2 rounded font-bold hover:bg-indigo-700 shadow text-sm">檢查並生成新賽程</button>
                         </div>
-                        <p class="text-xs text-indigo-600">自動湊 3 人一局。若剩餘 2 人（或總共僅 2 人）將自動生成 2 人局。</p>
+                        <p class="text-xs text-indigo-600">根據人數自動分配，全部合併至 Room 7。</p>
                     </div>
 
                     <div class="grid lg:grid-cols-2 gap-4">
@@ -350,9 +374,8 @@
                     </div>
                 </div>
 
-                <!-- 決賽管理 -->
                 <div v-if="adminStage === 'final'" class="space-y-6">
-                    <button @click="generateFinal" class="w-full py-3 bg-yellow-600 text-white rounded font-bold hover:bg-yellow-700 shadow">生成決賽名單</button>
+                    <button @click="generateFinal" class="w-full py-3 bg-yellow-600 text-white rounded font-bold hover:bg-yellow-700 shadow">生成決賽名單 (目標4人)</button>
                     
                     <div v-for="m in finalMatches" :key="m.id" class="bg-white border-4 border-yellow-200 p-6 rounded-xl shadow-lg">
                         <h3 class="text-center font-bold text-xl text-yellow-800 mb-2">🏆 決賽排名</h3>
@@ -369,26 +392,21 @@
                 </div>
             </div>
 
-            <!-- 3. 觀眾賽程 -->
             <div v-if="currentView === 'schedule'" class="space-y-10 pb-10">
                 
-                <!-- 決賽 (Banner) -->
                 <div v-if="finalMatches.length > 0" class="animate-fade-in-down">
                     <div class="text-center mb-6">
                          <span class="bg-yellow-500 text-white px-4 py-1 rounded-full text-sm font-bold tracking-widest shadow">FINAL STAGE</span>
                     </div>
                     <div v-for="m in finalMatches" class="flex justify-center items-end gap-2 md:gap-4 text-center max-w-2xl mx-auto">
-                        <!-- 亞軍 -->
                         <div class="w-1/3 flex flex-col items-center">
                             <div class="text-gray-600 font-bold text-sm md:text-lg mb-1 truncate w-full">{{ m.ranks && m.ranks[1] ? m.players.find(p=>p.id===m.ranks[1]).name : '???' }}</div>
                             <div class="w-full h-24 md:h-32 bg-gray-300 rounded-t-lg flex items-center justify-center text-3xl shadow-lg border-t-4 border-gray-400">🥈</div>
                         </div>
-                        <!-- 冠軍 -->
                         <div class="w-1/3 flex flex-col items-center -mb-2 z-10">
                             <div class="text-yellow-600 font-black text-lg md:text-2xl mb-2 truncate w-full transform -translate-y-2">{{ m.ranks && m.ranks[0] ? m.players.find(p=>p.id===m.ranks[0]).name : '???' }}</div>
                             <div class="w-full h-32 md:h-40 bg-yellow-400 rounded-t-lg flex items-center justify-center text-5xl shadow-xl border-t-4 border-yellow-200 ring-4 ring-yellow-100">🥇</div>
                         </div>
-                        <!-- 季軍 -->
                         <div class="w-1/3 flex flex-col items-center">
                             <div class="text-orange-700 font-bold text-sm md:text-lg mb-1 truncate w-full">{{ m.ranks && m.ranks[2] ? m.players.find(p=>p.id===m.ranks[2]).name : '???' }}</div>
                             <div class="w-full h-20 md:h-24 bg-orange-300 rounded-t-lg flex items-center justify-center text-3xl shadow-lg border-t-4 border-orange-400">🥉</div>
@@ -396,7 +414,6 @@
                     </div>
                 </div>
 
-                <!-- 半決賽 -->
                 <div v-if="semiMatches.length > 0">
                     <h3 class="text-center text-xl font-bold text-indigo-800 mb-4 flex items-center justify-center gap-2">
                         <span class="block w-8 h-1 bg-indigo-200 rounded"></span> 半決賽 <span class="block w-8 h-1 bg-indigo-200 rounded"></span>
@@ -405,7 +422,7 @@
                         <div v-for="m in semiMatches" class="bg-white p-3 rounded shadow-sm border-l-4 border-indigo-500">
                             <div class="flex justify-between mb-2">
                                 <span class="text-xs text-indigo-400 font-bold">{{ m.room }}</span>
-                                <span v-if="m.players.length===2" class="text-xs bg-orange-100 text-orange-600 px-2 rounded">2人對決</span>
+                                <span class="text-xs text-gray-400">{{ m.group }}</span>
                             </div>
                             <div class="space-y-1">
                                 <div v-for="p in m.players" class="flex justify-between items-center p-1.5 rounded text-sm" 
@@ -418,7 +435,6 @@
                     </div>
                 </div>
 
-                <!-- 初賽 -->
                 <div v-if="prelimMatches.length > 0">
                     <h3 class="text-center text-xl font-bold text-gray-600 mb-4">初賽總覽</h3>
                     <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 px-2">
